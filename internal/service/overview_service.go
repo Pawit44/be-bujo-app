@@ -38,6 +38,10 @@ type IndexView struct {
 	FutureMonths []MonthSummary      `json:"futureMonths"`
 	Collections  []models.Collection `json:"collections"`
 	Recent       []models.Entry      `json:"recent"`
+	// DueForReview is how many open entries have a spread in the past —
+	// the count behind the sidebar's Review badge. The list itself is
+	// fetched separately (GET /entries/review) only when that page opens.
+	DueForReview int64 `json:"dueForReview"`
 	Totals       struct {
 		Entries int64 `json:"entries"`
 		Done    int64 `json:"done"`
@@ -75,6 +79,7 @@ type indexCounts struct {
 	WeeklyTotal  int64
 	WeeklyOpen   int64
 	WeeklyDone   int64
+	DueForReview int64
 }
 
 // monthCount is one (month, status) bucket of the future log.
@@ -145,7 +150,14 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 			COUNT(*) FILTER (WHERE log_kind = ? AND month = ? AND status = ?) AS monthly_done,
 			COUNT(*) FILTER (WHERE log_kind = ? AND date >= ? AND date <= ?) AS weekly_total,
 			COUNT(*) FILTER (WHERE log_kind = ? AND date >= ? AND date <= ? AND status = ?) AS weekly_open,
-			COUNT(*) FILTER (WHERE log_kind = ? AND date >= ? AND date <= ? AND status = ?) AS weekly_done`
+			COUNT(*) FILTER (WHERE log_kind = ? AND date >= ? AND date <= ? AND status = ?) AS weekly_done,
+			COUNT(*) FILTER (
+				WHERE status = ? AND (
+					(log_kind = ? AND date < ?) OR
+					(log_kind = ? AND month < ?) OR
+					(log_kind = ? AND month <= ?)
+				)
+			) AS due_for_review`
 		return s.entries.Scoped(userID).Select(sel,
 			models.StatusDone,
 			models.LogFuture,
@@ -157,6 +169,10 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 			models.LogWeekly, weekStart, weekEnd,
 			models.LogWeekly, weekStart, weekEnd, models.StatusOpen,
 			models.LogWeekly, weekStart, weekEnd, models.StatusDone,
+			models.StatusOpen,
+			models.LogWeekly, now.Format("2006-01-02"),
+			models.LogMonthly, month,
+			models.LogFuture, month,
 		).Scan(&counts).Error
 	})
 
@@ -222,6 +238,7 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 	view.Recent = recent
 	view.Totals.Entries = counts.TotalEntries
 	view.Totals.Done = counts.TotalDone
+	view.DueForReview = counts.DueForReview
 
 	return view, nil
 }

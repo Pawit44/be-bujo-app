@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"time"
 	"unicode/utf8"
 
 	"bujo/internal/limits"
@@ -53,6 +54,14 @@ func NewEntryService(entries repository.EntryRepository, collections repository.
 
 func (s *EntryService) List(userID uint, filters repository.EntryFilters) ([]models.Entry, error) {
 	return s.entries.List(userID, filters)
+}
+
+// ListDue is the review/migration ritual's data: every open entry whose
+// spread is already in the past. now is injected rather than read from
+// time.Now() here so a caller (and a test) controls exactly what "today"
+// means for the query.
+func (s *EntryService) ListDue(userID uint, now time.Time) ([]models.Entry, error) {
+	return s.entries.ListDue(userID, now.Format("2006-01-02"), now.Format("2006-01"))
 }
 
 func (s *EntryService) Get(id, userID uint) (*models.Entry, error) {

@@ -45,6 +45,15 @@ type EntryRepository interface {
 	// one transaction — the persistence-layer half of a drag-reorder.
 	UpdatePositions(userID uint, orderedIDs []uint) error
 	RecentForUser(userID uint, limit int) ([]models.Entry, error)
+	// ListDue returns every open entry whose spread has already passed —
+	// the BuJo migration ritual's raw material: a weekly entry dated before
+	// today, a monthly entry from a month that's over, or a future entry
+	// whose month has arrived (future-log items are meant to be migrated
+	// into the monthly/weekly log once their month starts, not left sitting
+	// in Future). Each log kind measures "past" on the field it actually
+	// uses — comparing every row to the same date/month would either miss
+	// month-scoped rows entirely or misjudge day-scoped ones.
+	ListDue(userID uint, today, month string) ([]models.Entry, error)
 	// Scoped returns a query already filtered to userID, for the read-only
 	// reporting aggregates the Index/Stats pages need (assorted counts by
 	// status/type/date-range). Reporting queries are inherently varied in
@@ -197,6 +206,20 @@ func (r *entryRepository) UpdatePositions(userID uint, orderedIDs []uint) error 
 func (r *entryRepository) RecentForUser(userID uint, limit int) ([]models.Entry, error) {
 	var entries []models.Entry
 	err := r.db.Where("user_id = ?", userID).Order("updated_at desc").Limit(limit).Find(&entries).Error
+	return entries, err
+}
+
+func (r *entryRepository) ListDue(userID uint, today, month string) ([]models.Entry, error) {
+	var entries []models.Entry
+	err := r.db.Where("user_id = ? AND status = ?", userID, models.StatusOpen).
+		Where(
+			"(log_kind = ? AND date < ?) OR (log_kind = ? AND month < ?) OR (log_kind = ? AND month <= ?)",
+			models.LogWeekly, today,
+			models.LogMonthly, month,
+			models.LogFuture, month,
+		).
+		Order("date asc, month asc, position asc, id asc").
+		Find(&entries).Error
 	return entries, err
 }
 

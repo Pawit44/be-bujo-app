@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -66,6 +67,19 @@ func (ctrl *EntryController) List(c *gin.Context) {
 		Search:       c.Query("q"),
 	}
 	entries, err := ctrl.entries.List(uid, filters)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, entries)
+}
+
+// ListDue GET /api/entries/review — every open entry from a spread that has
+// already passed: the raw material for the BuJo "migration" ritual (decide,
+// for each: done, move it forward, or drop it).
+func (ctrl *EntryController) ListDue(c *gin.Context) {
+	uid := middleware.CurrentUser(c).ID
+	entries, err := ctrl.entries.ListDue(uid, time.Now())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

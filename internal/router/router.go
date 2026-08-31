@@ -67,6 +67,7 @@ func New(ctrls Controllers, deps Deps) *gin.Engine {
 		authed.GET("/stats", ctrls.Overview.Stats)
 
 		authed.GET("/entries", ctrls.Entry.List)
+		authed.GET("/entries/review", ctrls.Entry.ListDue)
 		authed.GET("/entries/:id", ctrls.Entry.Get)
 		mutating := authed.Group("", csrf)
 		mutating.POST("/entries", ctrls.Entry.Create)
