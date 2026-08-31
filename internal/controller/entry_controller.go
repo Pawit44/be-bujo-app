@@ -4,10 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"bujo/internal/clock"
 	"bujo/internal/middleware"
 	"bujo/internal/models"
 	"bujo/internal/repository"
@@ -79,7 +79,7 @@ func (ctrl *EntryController) List(c *gin.Context) {
 // for each: done, move it forward, or drop it).
 func (ctrl *EntryController) ListDue(c *gin.Context) {
 	uid := middleware.CurrentUser(c).ID
-	entries, err := ctrl.entries.ListDue(uid, time.Now())
+	entries, err := ctrl.entries.ListDue(uid, clock.Now())
 	if err != nil {
 		internalError(c, "entries.ListDue", err)
 		return

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"bujo/internal/clock"
 	"bujo/internal/models"
 	"bujo/internal/repository"
 )
@@ -46,6 +47,18 @@ type IndexView struct {
 		Entries int64 `json:"entries"`
 		Done    int64 `json:"done"`
 	} `json:"totals"`
+	// TypeBreakdown is every entry, all-time, split the same way the app's
+	// own entry-list tabs split them — task/event/note/idea, each with an
+	// open and a done count — for the Profile page's "what's actually in
+	// here" drill-down. Always these four tabs in this order, even at zero,
+	// so the frontend never has to guess which tabs exist.
+	TypeBreakdown []TypeCount `json:"typeBreakdown"`
+}
+
+type TypeCount struct {
+	Tab  string `json:"tab"`
+	Open int64  `json:"open"`
+	Done int64  `json:"done"`
 }
 
 type StatsView struct {
@@ -89,6 +102,18 @@ type monthCount struct {
 	N      int64
 }
 
+// typeStatusCount is one (type, inspiration, status) bucket, raw from the
+// database — inspiration hasn't been folded into "idea" yet, and every
+// status (not just open/done) is present, so this is reshaped before it
+// reaches the API. See tabOf in the frontend's lib/entryFilters.ts for the
+// same task/event/note/idea split this mirrors.
+type typeStatusCount struct {
+	Type        string
+	Inspiration bool
+	Status      string
+	N           int64
+}
+
 // Index gathers everything the INDEX page needs.
 //
 // Every figure on the page used to be its own COUNT — 31 sequential round
@@ -99,7 +124,7 @@ type monthCount struct {
 // independent, so they run concurrently and the endpoint costs roughly one
 // round trip of latency instead of thirty-one.
 func (s *OverviewService) Index(userID uint) (*IndexView, error) {
-	now := time.Now()
+	now := clock.Now()
 	month := now.Format("2006-01")
 	weekStart, weekEnd := weekBounds(now)
 
@@ -124,7 +149,8 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 		monthRows   []monthCount
 		collections []models.Collection
 		recent      []models.Entry
-		errs        [4]error
+		typeRows    []typeStatusCount
+		errs        [5]error
 		wg          sync.WaitGroup
 	)
 
@@ -197,6 +223,13 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 		return err
 	})
 
+	run(4, func() error {
+		return s.entries.Scoped(userID).
+			Select("type, inspiration, status, COUNT(*) AS n").
+			Group("type, inspiration, status").
+			Scan(&typeRows).Error
+	})
+
 	wg.Wait()
 	for _, err := range errs {
 		if err != nil {
@@ -240,14 +273,52 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 	view.Totals.Entries = counts.TotalEntries
 	view.Totals.Done = counts.TotalDone
 	view.DueForReview = counts.DueForReview
+	view.TypeBreakdown = bucketTypeBreakdown(typeRows)
 
 	return view, nil
+}
+
+// bucketTypeBreakdown folds the raw (type, inspiration, status) rows into the
+// four tabs the app's own entry lists use — an inspiration-flagged row is an
+// "idea" regardless of its underlying type, exactly like tabOf() on the
+// frontend — and keeps only open/done, the two statuses that UI distinguishes
+// with a status filter of their own. Always returns all four tabs, in a
+// fixed order, even at zero, so the frontend never has to guess which exist.
+func bucketTypeBreakdown(rows []typeStatusCount) []TypeCount {
+	tabs := []string{"task", "event", "note", "idea"}
+	byTab := make(map[string]*TypeCount, len(tabs))
+	for _, tab := range tabs {
+		byTab[tab] = &TypeCount{Tab: tab}
+	}
+
+	for _, row := range rows {
+		tab := row.Type
+		if row.Inspiration {
+			tab = "idea"
+		}
+		bucket, ok := byTab[tab]
+		if !ok {
+			continue // an entry type the UI doesn't have a tab for
+		}
+		switch models.EntryStatus(row.Status) {
+		case models.StatusOpen:
+			bucket.Open += row.N
+		case models.StatusDone:
+			bucket.Done += row.N
+		}
+	}
+
+	breakdown := make([]TypeCount, len(tabs))
+	for i, tab := range tabs {
+		breakdown[i] = *byTab[tab]
+	}
+	return breakdown
 }
 
 // Stats returns completion figures for one month.
 func (s *OverviewService) Stats(userID uint, month string) (*StatsView, error) {
 	if month == "" {
-		month = time.Now().Format("2006-01")
+		month = clock.Now().Format("2006-01")
 	}
 	start := month + "-01"
 	t, err := time.Parse("2006-01-02", start)

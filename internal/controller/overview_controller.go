@@ -2,10 +2,10 @@ package controller
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"bujo/internal/clock"
 	"bujo/internal/middleware"
 	"bujo/internal/service"
 )
@@ -34,7 +34,7 @@ func (ctrl *OverviewController) Stats(c *gin.Context) {
 	uid := middleware.CurrentUser(c).ID
 	month := c.Query("month")
 	if month == "" {
-		month = time.Now().Format("2006-01")
+		month = clock.Now().Format("2006-01")
 	}
 	view, err := ctrl.overview.Stats(uid, month)
 	if err != nil {
