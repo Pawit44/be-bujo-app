@@ -43,7 +43,7 @@ func (ctrl *CollectionController) List(c *gin.Context) {
 	uid := middleware.CurrentUser(c).ID
 	views, err := ctrl.collections.List(uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		internalError(c, "collections.List", err)
 		return
 	}
 	c.JSON(http.StatusOK, views)

@@ -44,7 +44,14 @@ type EntryRepository interface {
 	// UpdatePositions sets position = index in orderedIDs, for every id, in
 	// one transaction — the persistence-layer half of a drag-reorder.
 	UpdatePositions(userID uint, orderedIDs []uint) error
-	RecentForUser(userID uint, limit int) ([]models.Entry, error)
+	// RecentForUser returns the most recently touched entries that belong to
+	// the current month: a weekly entry dated inside it, a monthly/future
+	// entry for it, or any collection entry (those aren't date-scoped, so
+	// they're always eligible). Older entries some past action happened to
+	// touch again are deliberately excluded — that's what the Review page is
+	// for; this list is meant to answer "what have I been doing this month,"
+	// not surface stale months next to today's work.
+	RecentForUser(userID uint, limit int, month, monthStart, monthEnd string) ([]models.Entry, error)
 	// ListDue returns every open entry whose spread has already passed —
 	// the BuJo migration ritual's raw material: a weekly entry dated before
 	// today, a monthly entry from a month that's over, or a future entry
@@ -203,9 +210,16 @@ func (r *entryRepository) UpdatePositions(userID uint, orderedIDs []uint) error 
 		Update("position", gorm.Expr(cases.String(), caseArgs...)).Error
 }
 
-func (r *entryRepository) RecentForUser(userID uint, limit int) ([]models.Entry, error) {
+func (r *entryRepository) RecentForUser(userID uint, limit int, month, monthStart, monthEnd string) ([]models.Entry, error) {
 	var entries []models.Entry
-	err := r.db.Where("user_id = ?", userID).Order("updated_at desc").Limit(limit).Find(&entries).Error
+	err := r.db.Where("user_id = ?", userID).
+		Where(
+			"log_kind = ? OR (log_kind IN (?, ?) AND month = ?) OR (log_kind = ? AND date >= ? AND date <= ?)",
+			models.LogCollection,
+			models.LogMonthly, models.LogFuture, month,
+			models.LogWeekly, monthStart, monthEnd,
+		).
+		Order("updated_at desc").Limit(limit).Find(&entries).Error
 	return entries, err
 }
 

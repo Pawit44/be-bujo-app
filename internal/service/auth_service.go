@@ -95,6 +95,15 @@ func (s *AuthService) Register(email, password, name string) (*models.User, erro
 
 	user := &models.User{Email: email, PasswordHash: hash, Name: name, Role: role}
 	if err := s.users.Create(user); err != nil {
+		// The FindByEmail check above is check-then-insert, not atomic — two
+		// registrations for the same address arriving close together can both
+		// pass it and race to the database, where the unique constraint is
+		// what actually decides. repository.ErrEmailTaken is that outcome
+		// translated to the same sentinel the pre-check would have returned,
+		// so the loser of the race gets the same readable error either way.
+		if errors.Is(err, repository.ErrEmailTaken) {
+			return nil, ErrEmailTaken
+		}
 		return nil, err
 	}
 

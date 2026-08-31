@@ -100,9 +100,9 @@ func (ctrl *AuthController) DeleteMe(c *gin.Context) {
 	if err := ctrl.auth.DeleteAccount(user, req.Password); err != nil {
 		switch {
 		case errors.Is(err, service.ErrWrongPassword):
-			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "code": "wrong_password"})
 		case errors.Is(err, service.ErrLastAdminAccount):
-			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "last_admin"})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not delete account"})
 		}
@@ -117,14 +117,22 @@ func (ctrl *AuthController) setSession(c *gin.Context, token string, expiresAt t
 	middleware.SetSessionCookie(c, ctrl.cfg.CookieSecure, ctrl.cfg.CookieDomain, token, maxAge)
 }
 
+// respondAuthError maps a known sentinel to both an English fallback message
+// (`error`) and a stable `code` the client can key its own localized copy
+// off of. Only sentinels get a code — the default branch is validation
+// errors (bad email format, weak password) that already say exactly what's
+// wrong and don't need translation-by-code, and a raw unexpected error is
+// never able to reach here uncoded because every place that can produce one
+// (e.g. the register/insert race — see repository.ErrEmailTaken) is caught
+// and translated to a sentinel before it gets this far.
 func (ctrl *AuthController) respondAuthError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrEmailTaken):
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "code": "email_taken"})
 	case errors.Is(err, service.ErrInvalidLogin):
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error(), "code": "invalid_login"})
 	case errors.Is(err, service.ErrAccountLocked):
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error(), "code": "account_locked"})
 	default:
 		// Validation errors (bad email format, weak password, etc.) are
 		// plain messages meant to be shown to the user as-is.

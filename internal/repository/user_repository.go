@@ -1,10 +1,23 @@
 package repository
 
 import (
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"bujo/internal/models"
 )
+
+// ErrEmailTaken is returned by Create when the email uniqueness constraint
+// rejects the insert. AuthService already checks FindByEmail before calling
+// Create, but that check-then-insert has a gap: two registrations for the
+// same address arriving close together can both pass the check and race to
+// insert, so the constraint — not the pre-check — is the actual last line of
+// defense. Without this translation, whichever one lost the race surfaced
+// the raw driver error ("duplicate key value violates unique constraint
+// ...") straight to the client instead of a message anyone could read.
+var ErrEmailTaken = errors.New("email already registered")
 
 // UserRepository is the only thing in the app that knows how a User is
 // persisted. Services depend on this interface, never on *gorm.DB directly,
@@ -31,7 +44,12 @@ func NewUserRepository(db *gorm.DB) UserRepository {
 }
 
 func (r *userRepository) Create(user *models.User) error {
-	return r.db.Create(user).Error
+	err := r.db.Create(user).Error
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+		return ErrEmailTaken
+	}
+	return err
 }
 
 func (r *userRepository) FindByEmail(email string) (*models.User, error) {

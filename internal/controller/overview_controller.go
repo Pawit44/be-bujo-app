@@ -23,7 +23,7 @@ func (ctrl *OverviewController) Index(c *gin.Context) {
 	uid := middleware.CurrentUser(c).ID
 	view, err := ctrl.overview.Index(uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		internalError(c, "overview.Index", err)
 		return
 	}
 	c.JSON(http.StatusOK, view)

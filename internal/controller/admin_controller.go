@@ -23,7 +23,7 @@ func NewAdminController(admin *service.AdminService) *AdminController {
 func (ctrl *AdminController) ListUsers(c *gin.Context) {
 	users, err := ctrl.admin.ListUsers()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		internalError(c, "admin.ListUsers", err)
 		return
 	}
 	c.JSON(http.StatusOK, users)
@@ -77,6 +77,6 @@ func respondAdminError(c *gin.Context, err error) {
 		errors.Is(err, service.ErrCannotDeleteSelf):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		internalError(c, "admin", err)
 	}
 }

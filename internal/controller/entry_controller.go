@@ -68,7 +68,7 @@ func (ctrl *EntryController) List(c *gin.Context) {
 	}
 	entries, err := ctrl.entries.List(uid, filters)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		internalError(c, "entries.List", err)
 		return
 	}
 	c.JSON(http.StatusOK, entries)
@@ -81,7 +81,7 @@ func (ctrl *EntryController) ListDue(c *gin.Context) {
 	uid := middleware.CurrentUser(c).ID
 	entries, err := ctrl.entries.ListDue(uid, time.Now())
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		internalError(c, "entries.ListDue", err)
 		return
 	}
 	c.JSON(http.StatusOK, entries)
@@ -202,7 +202,7 @@ func (ctrl *EntryController) Reorder(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		internalError(c, "entries.Reorder", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

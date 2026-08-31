@@ -192,7 +192,8 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 
 	run(3, func() error {
 		var err error
-		recent, err = s.entries.RecentForUser(userID, 8)
+		monthEnd := monthStart.AddDate(0, 1, -1).Format("2006-01-02")
+		recent, err = s.entries.RecentForUser(userID, 8, month, monthStart.Format("2006-01-02"), monthEnd)
 		return err
 	})
 
