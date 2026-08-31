@@ -13,4 +13,7 @@ const (
 
 	MaxCollectionTitleLength       = 120
 	MaxCollectionDescriptionLength = 500
+
+	MaxFoldersPerCollection = 40
+	MaxFolderTitleLength    = 120
 )

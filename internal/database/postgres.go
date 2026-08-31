@@ -56,7 +56,7 @@ func Connect(databaseURL string, autoMigrate bool) *gorm.DB {
 		// startup, and the log line is what tells you whether turning it off
 		// in production is worth doing.
 		started := time.Now()
-		if err := db.AutoMigrate(&models.User{}, &models.Session{}, &models.Collection{}, &models.Entry{}); err != nil {
+		if err := db.AutoMigrate(&models.User{}, &models.Session{}, &models.Collection{}, &models.Folder{}, &models.Entry{}); err != nil {
 			log.Fatalf("database: migration failed: %v", err)
 		}
 		log.Printf("database: schema reconciled in %v (set DB_AUTO_MIGRATE=false to skip once the schema is settled)", time.Since(started).Round(time.Millisecond))

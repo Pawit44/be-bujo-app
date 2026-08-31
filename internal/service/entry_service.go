@@ -16,6 +16,14 @@ var (
 	ErrCollectionNotFound = repository.ErrCollectionNotFound
 	ErrContentRequired    = errors.New("content is required")
 	ErrLogKindRequired    = errors.New("logKind is required")
+	// ErrFolderRequiresCollection: a folder only exists inside a collection,
+	// so an entry can't be filed into one without also being in that
+	// collection.
+	ErrFolderRequiresCollection = errors.New("a folder requires a collection")
+	// ErrFolderWrongCollection: filing an entry into a folder from a
+	// *different* collection than the one it's being put in would silently
+	// misfile it — rejected instead of allowed to happen quietly.
+	ErrFolderWrongCollection = errors.New("that folder belongs to a different collection")
 )
 
 // EntryInput carries every field an entry create/update can touch. Pointer
@@ -29,10 +37,13 @@ type EntryInput struct {
 	Month        string
 	Date         string
 	CollectionID *uint
-	Priority     *bool
-	Inspiration  *bool
-	Position     *int
-	Notes        *string
+	// FolderID optionally files a collection entry into one of that
+	// collection's folders; nil leaves it in the collection's unsorted area.
+	FolderID    *uint
+	Priority    *bool
+	Inspiration *bool
+	Position    *int
+	Notes       *string
 }
 
 // MigrateInput is where an entry is being moved to.
@@ -41,15 +52,17 @@ type MigrateInput struct {
 	Month        string
 	Date         string
 	CollectionID *uint
+	FolderID     *uint
 }
 
 type EntryService struct {
 	entries     repository.EntryRepository
 	collections repository.CollectionRepository
+	folders     repository.FolderRepository
 }
 
-func NewEntryService(entries repository.EntryRepository, collections repository.CollectionRepository) *EntryService {
-	return &EntryService{entries: entries, collections: collections}
+func NewEntryService(entries repository.EntryRepository, collections repository.CollectionRepository, folders repository.FolderRepository) *EntryService {
+	return &EntryService{entries: entries, collections: collections, folders: folders}
 }
 
 func (s *EntryService) List(userID uint, filters repository.EntryFilters) ([]models.Entry, error) {
@@ -78,6 +91,9 @@ func (s *EntryService) Create(userID uint, in EntryInput) (*models.Entry, error)
 	if err := s.checkOwnsCollection(userID, in.CollectionID); err != nil {
 		return nil, err
 	}
+	if err := s.checkFolder(userID, in.FolderID, in.CollectionID); err != nil {
+		return nil, err
+	}
 	if err := validateEntryText(in.Content, in.Notes); err != nil {
 		return nil, err
 	}
@@ -94,6 +110,7 @@ func (s *EntryService) Create(userID uint, in EntryInput) (*models.Entry, error)
 		Month:        in.Month,
 		Date:         in.Date,
 		CollectionID: in.CollectionID,
+		FolderID:     in.FolderID,
 	}
 	if in.Priority != nil {
 		entry.Priority = *in.Priority
@@ -227,6 +244,9 @@ func (s *EntryService) Migrate(id, userID uint, in MigrateInput) (source *models
 	if err := s.checkOwnsCollection(userID, in.CollectionID); err != nil {
 		return nil, nil, err
 	}
+	if err := s.checkFolder(userID, in.FolderID, in.CollectionID); err != nil {
+		return nil, nil, err
+	}
 	if err := s.checkEntryQuota(userID); err != nil {
 		return nil, nil, err
 	}
@@ -240,6 +260,7 @@ func (s *EntryService) Migrate(id, userID uint, in MigrateInput) (source *models
 		Month:        in.Month,
 		Date:         in.Date,
 		CollectionID: in.CollectionID,
+		FolderID:     in.FolderID,
 		Priority:     entry.Priority,
 		Inspiration:  entry.Inspiration,
 		Notes:        entry.Notes,
@@ -313,6 +334,49 @@ func (s *EntryService) Delete(id, userID uint) error {
 		return err
 	}
 	return s.entries.Delete(entry)
+}
+
+// checkFolder validates a folder reference at create time: nil is always
+// fine (no folder), and a non-nil one must both exist for this user and
+// belong to the same collection the entry is being placed in. Only used by
+// Create — updating an existing entry's folder goes through SetFolder
+// instead, where "no folder" is an unambiguous instruction rather than a
+// pointer that could just as easily mean "field omitted."
+func (s *EntryService) checkFolder(userID uint, folderID, collectionID *uint) error {
+	if folderID == nil {
+		return nil
+	}
+	if collectionID == nil {
+		return ErrFolderRequiresCollection
+	}
+	folder, err := s.folders.FindOwned(*folderID, userID)
+	if err != nil {
+		return err
+	}
+	if folder.CollectionID != *collectionID {
+		return ErrFolderWrongCollection
+	}
+	return nil
+}
+
+// SetFolder files an entry into a folder, or back into its collection's
+// unsorted area when folderID is nil — this is a dedicated method, not part
+// of the general Update, because Update's pointer fields mean "leave
+// unchanged when absent," which can't also express "clear this back to
+// none." Here nil is never ambiguous: every call is a real instruction.
+func (s *EntryService) SetFolder(id, userID uint, folderID *uint) (*models.Entry, error) {
+	entry, err := s.entries.FindOwned(id, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkFolder(userID, folderID, entry.CollectionID); err != nil {
+		return nil, err
+	}
+	entry.FolderID = folderID
+	if err := s.entries.Update(entry); err != nil {
+		return nil, err
+	}
+	return entry, nil
 }
 
 func (s *EntryService) checkOwnsCollection(userID uint, collectionID *uint) error {

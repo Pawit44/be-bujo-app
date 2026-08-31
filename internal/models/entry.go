@@ -55,6 +55,11 @@ type Entry struct {
 	Date string `gorm:"index" json:"date"`
 
 	CollectionID *uint `gorm:"index" json:"collectionId"`
+	// FolderID optionally places a collection entry inside one of that
+	// collection's folders. Only meaningful when CollectionID is set — an
+	// entry outside a collection has no folder to belong to. Nil means the
+	// entry sits in the collection's own unsorted area, not inside any folder.
+	FolderID *uint `gorm:"index" json:"folderId"`
 
 	Priority    bool `gorm:"default:false" json:"priority"`    // *
 	Inspiration bool `gorm:"default:false" json:"inspiration"` // !

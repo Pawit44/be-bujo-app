@@ -63,10 +63,15 @@ func (r *collectionRepository) Update(col *models.Collection) error {
 	return r.db.Save(col).Error
 }
 
-// Delete removes the collection and every entry that lived on it.
+// Delete removes the collection, every entry that lived on it, and every
+// folder it had — a folder only ever means something as part of its
+// collection, so it has no reason to survive the collection itself.
 func (r *collectionRepository) Delete(col *models.Collection) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("collection_id = ?", col.ID).Delete(&models.Entry{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("collection_id = ?", col.ID).Delete(&models.Folder{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(col).Error

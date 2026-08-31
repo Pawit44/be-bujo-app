@@ -36,11 +36,13 @@ func main() {
 	sessions := repository.NewSessionRepository(db)
 	entries := repository.NewEntryRepository(db)
 	collections := repository.NewCollectionRepository(db)
+	folders := repository.NewFolderRepository(db)
 
 	// Services — business logic, depending only on repository interfaces.
 	authService := service.NewAuthService(users, sessions, cfg.AdminEmails)
-	entryService := service.NewEntryService(entries, collections)
+	entryService := service.NewEntryService(entries, collections, folders)
 	collectionService := service.NewCollectionService(collections, entries)
+	folderService := service.NewFolderService(folders, collections)
 	adminService := service.NewAdminService(users, sessions)
 	overviewService := service.NewOverviewService(entries, collections)
 
@@ -49,6 +51,7 @@ func main() {
 		Auth:       controller.NewAuthController(authService, cfg),
 		Entry:      controller.NewEntryController(entryService),
 		Collection: controller.NewCollectionController(collectionService),
+		Folder:     controller.NewFolderController(folderService),
 		Admin:      controller.NewAdminController(adminService),
 		Overview:   controller.NewOverviewController(overviewService),
 	}

@@ -30,10 +30,14 @@ type entryRequest struct {
 	Month        string             `json:"month"`
 	Date         string             `json:"date"`
 	CollectionID *uint              `json:"collectionId"`
-	Priority     *bool              `json:"priority"`
-	Inspiration  *bool              `json:"inspiration"`
-	Position     *int               `json:"position"`
-	Notes        *string            `json:"notes"`
+	// FolderID only takes effect on Create — see EntryInput.FolderID and
+	// SetFolder for why moving an existing entry between folders is a
+	// separate endpoint instead of going through this same struct.
+	FolderID    *uint   `json:"folderId"`
+	Priority    *bool   `json:"priority"`
+	Inspiration *bool   `json:"inspiration"`
+	Position    *int    `json:"position"`
+	Notes       *string `json:"notes"`
 }
 
 func (r entryRequest) toInput() service.EntryInput {
@@ -45,6 +49,7 @@ func (r entryRequest) toInput() service.EntryInput {
 		Month:        r.Month,
 		Date:         r.Date,
 		CollectionID: r.CollectionID,
+		FolderID:     r.FolderID,
 		Priority:     r.Priority,
 		Inspiration:  r.Inspiration,
 		Position:     r.Position,
@@ -158,6 +163,7 @@ type migrateRequest struct {
 	Month        string         `json:"month"`
 	Date         string         `json:"date"`
 	CollectionID *uint          `json:"collectionId"`
+	FolderID     *uint          `json:"folderId"`
 }
 
 // Migrate POST /api/entries/:id/migrate
@@ -177,12 +183,41 @@ func (ctrl *EntryController) Migrate(c *gin.Context) {
 		Month:        req.Month,
 		Date:         req.Date,
 		CollectionID: req.CollectionID,
+		FolderID:     req.FolderID,
 	})
 	if err != nil {
 		respondEntryError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"source": source, "migrated": migrated})
+}
+
+type setFolderRequest struct {
+	FolderID *uint `json:"folderId"`
+}
+
+// SetFolder PATCH /api/entries/:id/folder — files an entry into one of its
+// collection's folders, or (folderId: null) back into the collection's
+// unsorted area. Unlike the general Update, folderId here is never
+// ambiguous: this endpoint's only job is to set it, so null unambiguously
+// means "no folder" rather than "leave unchanged."
+func (ctrl *EntryController) SetFolder(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+	var req setFolderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	uid := middleware.CurrentUser(c).ID
+	entry, err := ctrl.entries.SetFolder(id, uid, req.FolderID)
+	if err != nil {
+		respondEntryError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, entry)
 }
 
 type reorderRequest struct {
@@ -236,9 +271,9 @@ func parseID(c *gin.Context) (uint, bool) {
 // text) is a plain 400 shown to the user as-is.
 func respondEntryError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, service.ErrEntryNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "entry not found"})
-	case errors.Is(err, service.ErrCollectionNotFound):
+	case errors.Is(err, service.ErrEntryNotFound), errors.Is(err, service.ErrFolderNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+	case errors.Is(err, service.ErrCollectionNotFound), errors.Is(err, service.ErrFolderRequiresCollection), errors.Is(err, service.ErrFolderWrongCollection):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrAlreadyMigrated), errors.Is(err, service.ErrSameLocation):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})

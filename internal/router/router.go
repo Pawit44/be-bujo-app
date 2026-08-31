@@ -19,6 +19,7 @@ type Controllers struct {
 	Auth       *controller.AuthController
 	Entry      *controller.EntryController
 	Collection *controller.CollectionController
+	Folder     *controller.FolderController
 	Admin      *controller.AdminController
 	Overview   *controller.OverviewController
 }
@@ -76,12 +77,17 @@ func New(ctrls Controllers, deps Deps) *gin.Engine {
 		mutating.DELETE("/entries/:id", ctrls.Entry.Delete)
 		mutating.POST("/entries/:id/toggle", ctrls.Entry.Toggle)
 		mutating.POST("/entries/:id/migrate", ctrls.Entry.Migrate)
+		mutating.PATCH("/entries/:id/folder", ctrls.Entry.SetFolder)
 
 		authed.GET("/collections", ctrls.Collection.List)
 		authed.GET("/collections/:id", ctrls.Collection.Get)
+		authed.GET("/collections/:id/folders", ctrls.Folder.List)
 		mutating.POST("/collections", ctrls.Collection.Create)
 		mutating.PATCH("/collections/:id", ctrls.Collection.Update)
 		mutating.DELETE("/collections/:id", ctrls.Collection.Delete)
+		mutating.POST("/collections/:id/folders", ctrls.Folder.Create)
+		mutating.PATCH("/folders/:id", ctrls.Folder.Update)
+		mutating.DELETE("/folders/:id", ctrls.Folder.Delete)
 
 		// Admin-only: account management, never journal content.
 		admin := authed.Group("/admin", requireAdmin)
