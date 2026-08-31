@@ -31,7 +31,7 @@ type Deps struct {
 
 func New(ctrls Controllers, deps Deps) *gin.Engine {
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS(deps.CORSOrigin), middleware.SecurityHeaders())
+	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS(deps.CORSOrigin), middleware.SecurityHeaders(), middleware.Compress())
 
 	requireAuth := middleware.RequireAuth(deps.SessionValidator)
 	requireAdmin := middleware.RequireAdmin()

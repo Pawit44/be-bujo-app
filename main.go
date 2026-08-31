@@ -29,7 +29,7 @@ func main() {
 		log.Printf("warning: ADMIN_EMAILS is empty — no email will register as admin. Set it to a comma-separated allowlist, e.g. ADMIN_EMAILS=you@example.com")
 	}
 
-	db := database.Connect(cfg.DatabaseURL)
+	db := database.Connect(cfg.DatabaseURL, cfg.AutoMigrate)
 
 	// Repositories — the only layer that touches *gorm.DB.
 	users := repository.NewUserRepository(db)

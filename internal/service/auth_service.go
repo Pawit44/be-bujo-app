@@ -11,9 +11,18 @@ import (
 )
 
 const (
-	// SessionTTL is how long a session stays valid without use. Each
-	// successful validation slides the expiry forward.
+	// SessionTTL is how long a session stays valid without use. Validation
+	// slides the expiry forward, but only once the session is past
+	// sessionSlideAfter — see ValidateSession.
 	SessionTTL = 30 * 24 * time.Hour
+
+	// sessionSlideAfter is how much of SessionTTL must have been used up
+	// before a validation bothers writing a new expiry. Sliding on *every*
+	// request turned each authenticated call into a database write for a
+	// value that changes nothing the user can observe; refreshing only in the
+	// last third of the window keeps "active users are never logged out"
+	// true while making the common request read-only.
+	sessionSlideAfter = SessionTTL / 3
 
 	maxFailedLogins = 5
 	lockoutDuration = 15 * time.Minute
@@ -53,13 +62,17 @@ func (s *AuthService) isAdminEmail(email string) bool {
 // Register creates a plain user account — admin is never granted by
 // registration order, only by a matching email in the admin allowlist (or
 // later promotion via the admin panel).
-func (s *AuthService) Register(email, password, name string) (*models.User, string, time.Time, error) {
+//
+// It deliberately does not issue a session: a new account has to be signed in
+// for explicitly, so possession of the password is proven once before any
+// journal data is reachable.
+func (s *AuthService) Register(email, password, name string) (*models.User, error) {
 	email = security.NormalizeEmail(email)
 	if err := security.ValidateEmail(email); err != nil {
-		return nil, "", time.Time{}, err
+		return nil, err
 	}
 	if err := security.ValidatePassword(password); err != nil {
-		return nil, "", time.Time{}, err
+		return nil, err
 	}
 	name = strings.TrimSpace(name)
 	if len(name) > maxNameLength {
@@ -67,12 +80,12 @@ func (s *AuthService) Register(email, password, name string) (*models.User, stri
 	}
 
 	if _, err := s.users.FindByEmail(email); err == nil {
-		return nil, "", time.Time{}, ErrEmailTaken
+		return nil, ErrEmailTaken
 	}
 
 	hash, err := security.HashPassword(password)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return nil, err
 	}
 
 	role := models.RoleUser
@@ -82,11 +95,10 @@ func (s *AuthService) Register(email, password, name string) (*models.User, stri
 
 	user := &models.User{Email: email, PasswordHash: hash, Name: name, Role: role}
 	if err := s.users.Create(user); err != nil {
-		return nil, "", time.Time{}, err
+		return nil, err
 	}
 
-	token, expiresAt, err := s.issueSession(user.ID)
-	return user, token, expiresAt, err
+	return user, nil
 }
 
 // Login validates credentials and, on success, issues a new session.
@@ -130,26 +142,28 @@ func (s *AuthService) Login(email, password string) (*models.User, string, time.
 
 // ValidateSession resolves a raw cookie token to its user, sliding the
 // session's expiry forward so an active user is never logged out mid-use.
+//
+// This runs on every authenticated request, so it is kept to a single read:
+// the session and its user come back from one join, and the expiry is only
+// rewritten once the session has aged past sessionSlideAfter.
 func (s *AuthService) ValidateSession(token string) (*models.User, error) {
 	if token == "" {
 		return nil, ErrInvalidSession
 	}
-	session, err := s.sessions.FindByTokenHash(security.HashToken(token))
+	session, user, err := s.sessions.FindWithUserByTokenHash(security.HashToken(token))
 	if err != nil {
 		return nil, ErrInvalidSession
 	}
-	if time.Now().After(session.ExpiresAt) {
+
+	now := time.Now()
+	if now.After(session.ExpiresAt) {
 		_ = s.sessions.Delete(session)
 		return nil, ErrInvalidSession
 	}
 
-	user, err := s.users.FindByID(session.UserID)
-	if err != nil {
-		return nil, ErrInvalidSession
+	if session.ExpiresAt.Sub(now) < SessionTTL-sessionSlideAfter {
+		_ = s.sessions.TouchExpiry(session.ID, now.Add(SessionTTL))
 	}
-
-	session.ExpiresAt = time.Now().Add(SessionTTL)
-	_ = s.sessions.Update(session)
 
 	return user, nil
 }

@@ -29,6 +29,21 @@ type Config struct {
 	// Registration order plays no part — an admin account only ever comes
 	// from a matching, normalized email in this set.
 	AdminEmails map[string]struct{}
+
+	// AutoMigrate controls whether the schema is reconciled at startup.
+	//
+	// It defaults to true, which is what a first deploy and local development
+	// need. It is worth turning off in production once the schema is settled:
+	// GORM inspects every table and column through information_schema, which
+	// is ~90 queries, and against a managed database a region away that is
+	// roughly half a minute of startup during which the service is not
+	// listening. On a host that suspends idle instances, that half minute is
+	// paid by whoever sends the first request after a quiet spell.
+	//
+	// With it off, a schema change is applied by deploying once with
+	// DB_AUTO_MIGRATE=true (or running the migration separately) and then
+	// turning it back off.
+	AutoMigrate bool
 }
 
 func Load() Config {
@@ -39,6 +54,7 @@ func Load() Config {
 		CookieSecure: env("COOKIE_SECURE", "false") == "true",
 		CookieDomain: env("COOKIE_DOMAIN", ""),
 		AdminEmails:  parseAdminEmails(env("ADMIN_EMAILS", "")),
+		AutoMigrate:  env("DB_AUTO_MIGRATE", "true") != "false",
 	}
 }
 

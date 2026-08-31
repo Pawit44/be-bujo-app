@@ -35,13 +35,14 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 		return
 	}
 
-	user, token, expiresAt, err := ctrl.auth.Register(req.Email, req.Password, req.Name)
+	user, err := ctrl.auth.Register(req.Email, req.Password, req.Name)
 	if err != nil {
 		ctrl.respondAuthError(c, err)
 		return
 	}
-	ctrl.setSession(c, token, expiresAt)
-	c.JSON(http.StatusOK, user)
+	// No session cookie is set here on purpose — the account exists, but the
+	// client still has to sign in through /auth/login to get one.
+	c.JSON(http.StatusCreated, user)
 }
 
 type loginRequest struct {

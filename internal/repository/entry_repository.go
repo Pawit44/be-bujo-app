@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -166,17 +167,31 @@ func (r *entryRepository) NextPosition(userID uint, logKind models.LogKind, mont
 	return *max + 1, nil
 }
 
+// UpdatePositions writes every new position in a single statement. A loop of
+// one UPDATE per row meant a dragged entry cost as many database round trips
+// as there are entries in the list; a CASE expression collapses that to one,
+// and the `user_id` guard keeps the batch scoped to its owner exactly as the
+// per-row version did.
 func (r *entryRepository) UpdatePositions(userID uint, orderedIDs []uint) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		for i, id := range orderedIDs {
-			if err := tx.Model(&models.Entry{}).
-				Where("id = ? AND user_id = ?", id, userID).
-				Update("position", i).Error; err != nil {
-				return err
-			}
-		}
+	if len(orderedIDs) == 0 {
 		return nil
-	})
+	}
+
+	// The THEN values are bound parameters, which Postgres would otherwise
+	// infer as text and then refuse to assign to a bigint column, so each one
+	// is cast explicitly.
+	var cases strings.Builder
+	caseArgs := make([]any, 0, len(orderedIDs)*2)
+	cases.WriteString("CASE id")
+	for i, id := range orderedIDs {
+		cases.WriteString(" WHEN ? THEN CAST(? AS bigint)")
+		caseArgs = append(caseArgs, id, i)
+	}
+	cases.WriteString(" END")
+
+	return r.db.Model(&models.Entry{}).
+		Where("id IN ? AND user_id = ?", orderedIDs, userID).
+		Update("position", gorm.Expr(cases.String(), caseArgs...)).Error
 }
 
 func (r *entryRepository) RecentForUser(userID uint, limit int) ([]models.Entry, error) {

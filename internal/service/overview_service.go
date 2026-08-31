@@ -2,13 +2,15 @@ package service
 
 import (
 	"errors"
+	"sync"
 	"time"
-
-	"gorm.io/gorm"
 
 	"bujo/internal/models"
 	"bujo/internal/repository"
 )
+
+// futureMonthsAhead is how many months of the future log the index previews.
+const futureMonthsAhead = 6
 
 var ErrInvalidMonth = errors.New("month must look like YYYY-MM")
 
@@ -59,13 +61,51 @@ func NewOverviewService(entries repository.EntryRepository, collections reposito
 	return &OverviewService{entries: entries, collections: collections}
 }
 
-// Index gathers everything the INDEX page needs in one round trip.
+// indexCounts holds every scalar count the index needs, filled by a single
+// conditional-aggregation query instead of one COUNT round trip per figure.
+type indexCounts struct {
+	TotalEntries int64
+	TotalDone    int64
+	FutureTotal  int64
+	FutureOpen   int64
+	FutureDone   int64
+	MonthlyTotal int64
+	MonthlyOpen  int64
+	MonthlyDone  int64
+	WeeklyTotal  int64
+	WeeklyOpen   int64
+	WeeklyDone   int64
+}
+
+// monthCount is one (month, status) bucket of the future log.
+type monthCount struct {
+	Month  string
+	Status string
+	N      int64
+}
+
+// Index gathers everything the INDEX page needs.
+//
+// Every figure on the page used to be its own COUNT — 31 sequential round
+// trips to Postgres for a single page load, which is brutal when the database
+// is a managed instance a region away. It is now four queries: one
+// conditional-aggregation pass for all the scalar counts, one grouped pass for
+// the six future months, plus collections and recent entries. Those four are
+// independent, so they run concurrently and the endpoint costs roughly one
+// round trip of latency instead of thirty-one.
 func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 	now := time.Now()
 	month := now.Format("2006-01")
 	weekStart, weekEnd := weekBounds(now)
 
-	base := s.entries.Scoped(userID)
+	// Anchor to the 1st before stepping months: AddDate on a day-31 date
+	// overflows into the following month (Sep 31 -> Oct 1), which would both
+	// skip a month and emit the next one twice.
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	months := make([]string, 0, futureMonthsAhead)
+	for i := 0; i < futureMonthsAhead; i++ {
+		months = append(months, monthStart.AddDate(0, i, 0).Format("2006-01"))
+	}
 
 	view := &IndexView{
 		Today:     now.Format("2006-01-02"),
@@ -74,40 +114,114 @@ func (s *OverviewService) Index(userID uint) (*IndexView, error) {
 		WeekEnd:   weekEnd,
 	}
 
+	var (
+		counts      indexCounts
+		monthRows   []monthCount
+		collections []models.Collection
+		recent      []models.Entry
+		errs        [4]error
+		wg          sync.WaitGroup
+	)
+
+	run := func(i int, fn func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = fn()
+		}()
+	}
+
+	// Each goroutine builds its query from a fresh Scoped() so no two of them
+	// ever share a statement being mutated.
+	run(0, func() error {
+		const sel = `
+			COUNT(*) AS total_entries,
+			COUNT(*) FILTER (WHERE status = ?) AS total_done,
+			COUNT(*) FILTER (WHERE log_kind = ?) AS future_total,
+			COUNT(*) FILTER (WHERE log_kind = ? AND status = ?) AS future_open,
+			COUNT(*) FILTER (WHERE log_kind = ? AND status = ?) AS future_done,
+			COUNT(*) FILTER (WHERE log_kind = ? AND month = ?) AS monthly_total,
+			COUNT(*) FILTER (WHERE log_kind = ? AND month = ? AND status = ?) AS monthly_open,
+			COUNT(*) FILTER (WHERE log_kind = ? AND month = ? AND status = ?) AS monthly_done,
+			COUNT(*) FILTER (WHERE log_kind = ? AND date >= ? AND date <= ?) AS weekly_total,
+			COUNT(*) FILTER (WHERE log_kind = ? AND date >= ? AND date <= ? AND status = ?) AS weekly_open,
+			COUNT(*) FILTER (WHERE log_kind = ? AND date >= ? AND date <= ? AND status = ?) AS weekly_done`
+		return s.entries.Scoped(userID).Select(sel,
+			models.StatusDone,
+			models.LogFuture,
+			models.LogFuture, models.StatusOpen,
+			models.LogFuture, models.StatusDone,
+			models.LogMonthly, month,
+			models.LogMonthly, month, models.StatusOpen,
+			models.LogMonthly, month, models.StatusDone,
+			models.LogWeekly, weekStart, weekEnd,
+			models.LogWeekly, weekStart, weekEnd, models.StatusOpen,
+			models.LogWeekly, weekStart, weekEnd, models.StatusDone,
+		).Scan(&counts).Error
+	})
+
+	run(1, func() error {
+		return s.entries.Scoped(userID).
+			Select("month, status, COUNT(*) AS n").
+			Where("log_kind = ? AND month IN ?", models.LogFuture, months).
+			Group("month, status").
+			Scan(&monthRows).Error
+	})
+
+	run(2, func() error {
+		var err error
+		collections, err = s.collections.List(userID)
+		return err
+	})
+
+	run(3, func() error {
+		var err error
+		recent, err = s.entries.RecentForUser(userID, 8)
+		return err
+	})
+
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	view.Logs = []LogSummary{
-		summaryFor("future", "Future Log", base.Session(&gorm.Session{}).Where("log_kind = ?", models.LogFuture)),
-		summaryFor("monthly", "Monthly Log", base.Session(&gorm.Session{}).Where("log_kind = ? AND month = ?", models.LogMonthly, month)),
-		summaryFor("weekly", "Weekly Log", base.Session(&gorm.Session{}).Where("log_kind = ? AND date >= ? AND date <= ?", models.LogWeekly, weekStart, weekEnd)),
+		{Key: "future", Label: "Future Log", Total: counts.FutureTotal, Open: counts.FutureOpen, Done: counts.FutureDone},
+		{Key: "monthly", Label: "Monthly Log", Total: counts.MonthlyTotal, Open: counts.MonthlyOpen, Done: counts.MonthlyDone},
+		{Key: "weekly", Label: "Weekly Log", Total: counts.WeeklyTotal, Open: counts.WeeklyOpen, Done: counts.WeeklyDone},
 	}
 
-	// The next six months of the future log, so the index can preview them.
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	view.FutureMonths = make([]MonthSummary, 0, 6)
-	for i := 0; i < 6; i++ {
-		m := monthStart.AddDate(0, i, 0).Format("2006-01")
-		scoped := base.Session(&gorm.Session{}).Where("log_kind = ? AND month = ?", models.LogFuture, m)
-		s := summaryFor(m, m, scoped)
-		view.FutureMonths = append(view.FutureMonths, MonthSummary{Month: m, Total: s.Total, Open: s.Open, Done: s.Done})
+	byMonth := make(map[string]*MonthSummary, len(months))
+	for _, row := range monthRows {
+		m := byMonth[row.Month]
+		if m == nil {
+			m = &MonthSummary{Month: row.Month}
+			byMonth[row.Month] = m
+		}
+		m.Total += row.N
+		switch models.EntryStatus(row.Status) {
+		case models.StatusOpen:
+			m.Open += row.N
+		case models.StatusDone:
+			m.Done += row.N
+		}
 	}
 
-	collections, err := s.collections.List(userID)
-	if err != nil {
-		return nil, err
+	view.FutureMonths = make([]MonthSummary, 0, len(months))
+	for _, m := range months {
+		if summary := byMonth[m]; summary != nil {
+			view.FutureMonths = append(view.FutureMonths, *summary)
+			continue
+		}
+		view.FutureMonths = append(view.FutureMonths, MonthSummary{Month: m})
 	}
+
 	view.Collections = collections
-
-	recent, err := s.entries.RecentForUser(userID, 8)
-	if err != nil {
-		return nil, err
-	}
 	view.Recent = recent
-
-	if err := base.Session(&gorm.Session{}).Count(&view.Totals.Entries).Error; err != nil {
-		return nil, err
-	}
-	if err := base.Session(&gorm.Session{}).Where("status = ?", models.StatusDone).Count(&view.Totals.Done).Error; err != nil {
-		return nil, err
-	}
+	view.Totals.Entries = counts.TotalEntries
+	view.Totals.Done = counts.TotalDone
 
 	return view, nil
 }
@@ -124,29 +238,44 @@ func (s *OverviewService) Stats(userID uint, month string) (*StatsView, error) {
 	}
 	end := t.AddDate(0, 1, -1).Format("2006-01-02")
 
-	scope := s.entries.Scoped(userID).Where("(month = ? OR (date >= ? AND date <= ?))", month, start, end)
+	statuses := []models.EntryStatus{models.StatusOpen, models.StatusDone, models.StatusMigrated, models.StatusScheduled, models.StatusCancelled}
+	types := []models.EntryType{models.TypeTask, models.TypeEvent, models.TypeNote}
 
-	byStatus := map[string]int64{}
-	for _, st := range []models.EntryStatus{models.StatusOpen, models.StatusDone, models.StatusMigrated, models.StatusScheduled, models.StatusCancelled} {
-		var n int64
-		if err := scope.Session(&gorm.Session{}).Where("status = ?", st).Count(&n).Error; err != nil {
-			return nil, err
-		}
-		byStatus[string(st)] = n
+	// One grouped pass instead of a COUNT per status and per type: statuses
+	// and types are independent breakdowns of the same rows, so grouping by
+	// both and summing each dimension separately in Go gets every figure from
+	// a single round trip.
+	var rows []struct {
+		Status string
+		Type   string
+		N      int64
+	}
+	if err := s.entries.Scoped(userID).
+		Select("status, type, COUNT(*) AS n").
+		Where("(month = ? OR (date >= ? AND date <= ?))", month, start, end).
+		Group("status, type").
+		Scan(&rows).Error; err != nil {
+		return nil, err
 	}
 
-	byType := map[string]int64{}
-	for _, ty := range []models.EntryType{models.TypeTask, models.TypeEvent, models.TypeNote} {
-		var n int64
-		if err := scope.Session(&gorm.Session{}).Where("type = ?", ty).Count(&n).Error; err != nil {
-			return nil, err
-		}
-		byType[string(ty)] = n
+	byStatus := make(map[string]int64, len(statuses))
+	for _, st := range statuses {
+		byStatus[string(st)] = 0
+	}
+	byType := make(map[string]int64, len(types))
+	for _, ty := range types {
+		byType[string(ty)] = 0
 	}
 
 	var total int64
-	if err := scope.Session(&gorm.Session{}).Count(&total).Error; err != nil {
-		return nil, err
+	for _, row := range rows {
+		total += row.N
+		if _, ok := byStatus[row.Status]; ok {
+			byStatus[row.Status] += row.N
+		}
+		if _, ok := byType[row.Type]; ok {
+			byType[row.Type] += row.N
+		}
 	}
 
 	rate := 0.0
@@ -155,14 +284,6 @@ func (s *OverviewService) Stats(userID uint, month string) (*StatsView, error) {
 	}
 
 	return &StatsView{Month: month, Total: total, ByStatus: byStatus, ByType: byType, CompletionRate: rate}, nil
-}
-
-func summaryFor(key, label string, base *gorm.DB) LogSummary {
-	s := LogSummary{Key: key, Label: label}
-	base.Session(&gorm.Session{}).Count(&s.Total)
-	base.Session(&gorm.Session{}).Where("status = ?", models.StatusOpen).Count(&s.Open)
-	base.Session(&gorm.Session{}).Where("status = ?", models.StatusDone).Count(&s.Done)
-	return s
 }
 
 // weekBounds returns the Monday and Sunday around t as YYYY-MM-DD.
