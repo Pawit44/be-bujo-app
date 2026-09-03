@@ -44,6 +44,17 @@ type EntryInput struct {
 	Inspiration *bool
 	Position    *int
 	Notes       *string
+	// StartTime/EndTime/Color are pointers for the same reason Notes is: nil
+	// means "leave unchanged" on update, and a pointer-to-empty-string is how
+	// the caller explicitly clears a time or color back off rather than
+	// leaving it untouched.
+	StartTime *string
+	EndTime   *string
+	Color     *string
+	// ReminderMinutes: nil means "leave unchanged" on update. A pointer to
+	// -1 explicitly turns the reminder off (can't just be an empty/zero
+	// value — 0 legitimately means "remind right at the start time").
+	ReminderMinutes *int
 }
 
 // MigrateInput is where an entry is being moved to.
@@ -121,6 +132,18 @@ func (s *EntryService) Create(userID uint, in EntryInput) (*models.Entry, error)
 	if in.Notes != nil {
 		entry.Notes = *in.Notes
 	}
+	if in.StartTime != nil {
+		entry.StartTime = *in.StartTime
+	}
+	if in.EndTime != nil {
+		entry.EndTime = *in.EndTime
+	}
+	if in.Color != nil {
+		entry.Color = *in.Color
+	}
+	if in.ReminderMinutes != nil {
+		entry.ReminderMinutes = reminderPointer(*in.ReminderMinutes)
+	}
 	if in.Position != nil {
 		entry.Position = *in.Position
 	} else {
@@ -189,11 +212,32 @@ func (s *EntryService) Update(id, userID uint, in EntryInput) (*models.Entry, er
 	if in.Notes != nil {
 		entry.Notes = *in.Notes
 	}
+	if in.StartTime != nil {
+		entry.StartTime = *in.StartTime
+	}
+	if in.EndTime != nil {
+		entry.EndTime = *in.EndTime
+	}
+	if in.Color != nil {
+		entry.Color = *in.Color
+	}
+	if in.ReminderMinutes != nil {
+		entry.ReminderMinutes = reminderPointer(*in.ReminderMinutes)
+	}
 
 	if err := s.entries.Update(entry); err != nil {
 		return nil, err
 	}
 	return entry, nil
+}
+
+// reminderPointer turns the sentinel -1 ("explicitly turn the reminder off")
+// into a nil ReminderMinutes, and passes any other value through unchanged.
+func reminderPointer(minutes int) *int {
+	if minutes < 0 {
+		return nil
+	}
+	return &minutes
 }
 
 // Toggle flips a task between open and done.
@@ -261,9 +305,13 @@ func (s *EntryService) Migrate(id, userID uint, in MigrateInput) (source *models
 		Date:         in.Date,
 		CollectionID: in.CollectionID,
 		FolderID:     in.FolderID,
-		Priority:     entry.Priority,
-		Inspiration:  entry.Inspiration,
-		Notes:        entry.Notes,
+		Priority:        entry.Priority,
+		Inspiration:     entry.Inspiration,
+		Notes:           entry.Notes,
+		StartTime:       entry.StartTime,
+		EndTime:         entry.EndTime,
+		Color:           entry.Color,
+		ReminderMinutes: entry.ReminderMinutes,
 	}
 	pos, err := s.entries.NextPosition(userID, moved.LogKind, moved.Month, moved.Date, moved.CollectionID)
 	if err != nil {

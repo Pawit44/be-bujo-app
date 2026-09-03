@@ -38,22 +38,33 @@ type entryRequest struct {
 	Inspiration *bool   `json:"inspiration"`
 	Position    *int    `json:"position"`
 	Notes       *string `json:"notes"`
+	StartTime   *string `json:"startTime"`
+	EndTime     *string `json:"endTime"`
+	Color       *string `json:"color"`
+	// ReminderMinutes: -1 explicitly turns the reminder off; a positive/zero
+	// value sets it; the field simply absent leaves it unchanged. See
+	// service.EntryInput.ReminderMinutes.
+	ReminderMinutes *int `json:"reminderMinutes"`
 }
 
 func (r entryRequest) toInput() service.EntryInput {
 	return service.EntryInput{
-		Content:      r.Content,
-		Type:         r.Type,
-		Status:       r.Status,
-		LogKind:      r.LogKind,
-		Month:        r.Month,
-		Date:         r.Date,
-		CollectionID: r.CollectionID,
-		FolderID:     r.FolderID,
-		Priority:     r.Priority,
-		Inspiration:  r.Inspiration,
-		Position:     r.Position,
-		Notes:        r.Notes,
+		Content:         r.Content,
+		Type:            r.Type,
+		Status:          r.Status,
+		LogKind:         r.LogKind,
+		Month:           r.Month,
+		Date:            r.Date,
+		CollectionID:    r.CollectionID,
+		FolderID:        r.FolderID,
+		Priority:        r.Priority,
+		Inspiration:     r.Inspiration,
+		Position:        r.Position,
+		Notes:           r.Notes,
+		StartTime:       r.StartTime,
+		EndTime:         r.EndTime,
+		Color:           r.Color,
+		ReminderMinutes: r.ReminderMinutes,
 	}
 }
 

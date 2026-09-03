@@ -65,6 +65,19 @@ type Entry struct {
 	Inspiration bool `gorm:"default:false" json:"inspiration"` // !
 	Position    int  `gorm:"default:0" json:"position"`
 
+	// StartTime/EndTime are "HH:MM" (24h), only meaningful for weekly-log
+	// entries placed on the timeline. Empty means "no time set" — the entry
+	// stays a plain untimed bullet.
+	StartTime string `gorm:"type:varchar(5)" json:"startTime"`
+	EndTime   string `gorm:"type:varchar(5)" json:"endTime"`
+	// Color is a palette token (e.g. "blue", "green") the timeline uses to
+	// tint the entry's block; empty means the default/uncolored look.
+	Color string `gorm:"type:varchar(20)" json:"color"`
+	// ReminderMinutes is how many minutes before StartTime to notify, 0
+	// meaning "right at the start time". Nil means no reminder is set —
+	// distinct from 0, so it can't be a plain int.
+	ReminderMinutes *int `json:"reminderMinutes"`
+
 	Notes     string         `json:"notes"`
 	CreatedAt time.Time      `json:"createdAt"`
 	UpdatedAt time.Time      `json:"updatedAt"`
