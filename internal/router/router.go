@@ -28,6 +28,10 @@ type Controllers struct {
 type Deps struct {
 	CORSOrigin       string
 	SessionValidator middleware.SessionValidator
+	// DBPing backs /api/health/db. Keep-alive crons should hit that route
+	// rather than /api/health: a free Supabase project pauses after about a
+	// week without database activity, and /api/health never touches the DB.
+	DBPing func() error
 }
 
 func New(ctrls Controllers, deps Deps) *gin.Engine {
@@ -49,6 +53,13 @@ func New(ctrls Controllers, deps Deps) *gin.Engine {
 	api := r.Group("/api", apiLimiter.Middleware())
 	{
 		api.GET("/health", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"status": "ok", "time": time.Now()})
+		})
+		api.GET("/health/db", func(c *gin.Context) {
+			if err := deps.DBPing(); err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"status": "db_unavailable"})
+				return
+			}
 			c.JSON(http.StatusOK, gin.H{"status": "ok", "time": time.Now()})
 		})
 

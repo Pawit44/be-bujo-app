@@ -59,6 +59,7 @@ func main() {
 	r := router.New(ctrls, router.Deps{
 		CORSOrigin:       cfg.CORSOrigin,
 		SessionValidator: authService,
+		DBPing:           func() error { return database.Ping(db) },
 	})
 
 	log.Printf("BUJO API listening on http://localhost:%s", cfg.Port)
